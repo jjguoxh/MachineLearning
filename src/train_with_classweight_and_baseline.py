@@ -31,8 +31,8 @@ BATCH_SIZE = 8         # 批量大小
 EPOCHS = 50            # 训练轮数
 LR = 1e-5              # 学习率
 PATIENCE = 10          # 早停耐心
-MODEL_PATH = "best_longtrend_model.pth"
-TRAINED_FILES_LOG = "trained_files.log"  # 记录已训练文件的日志文件
+MODEL_PATH = "../model/best_longtrend_model.pth"
+TRAINED_FILES_LOG = "../model/trained_files.log"  # 记录已训练文件的日志文件
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -134,7 +134,7 @@ def save_trained_file(filename):
     with open(TRAINED_FILES_LOG, 'a') as f:
         f.write(filename + '\n')
 
-def load_all_data(data_dir="E:/SnipingTactics/label"):
+def load_all_data(data_dir="../label"):
     """从指定目录加载所有带标签的CSV文件"""
     # 查找所有符合命名规则的CSV文件
     csv_pattern = os.path.join(data_dir, "[0-9][0-9][0-9][0-9][0-9][0-9].csv")

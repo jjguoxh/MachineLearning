@@ -11,7 +11,7 @@ from feature_engineering import add_features
 
 # 配置参数
 SEQ_LEN = 30
-MODEL_PATH = "./best_longtrend_model.pth"
+MODEL_PATH = "../model/best_longtrend_model.pth"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def load_model(input_dim, num_classes=5):
@@ -451,5 +451,5 @@ def predict_and_generate_signals(csv_file):
 if __name__ == "__main__":
     # 使用示例
     # 请替换为实际的CSV文件路径
-    csv_file_path = "./250813.csv"  # 替换为实际文件路径
+    csv_file_path = "../predict/250813.csv"  # 替换为实际文件路径
     predict_and_generate_signals(csv_file_path)

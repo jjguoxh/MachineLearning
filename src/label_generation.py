@@ -12,8 +12,8 @@ import numpy as np
 import os
 
 # ========= 可调参数 =========
-INPUT_DIR = "E:/SupervisedLearning/data/"  # 输入CSV文件目录
-OUTPUT_DIR = "E:/SupervisedLearning/label/"  # 输出标签文件目录
+INPUT_DIR = "../data/"  # 输入CSV文件目录
+OUTPUT_DIR = "../label/"  # 输出标签文件目录
 TOP_N = 3        # 每天取前 N 个最大振幅段（互不重叠）
 RETRACE_FRAC = 0.50  # 动态回撤阈值（例如 0.50 即 50%）
 MIN_LEN = 5      # 最小段长度（点数）
