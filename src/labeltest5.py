@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
 # ========= 可调参数 =========
-CSV_FILE = "250806.csv"
+CSV_FILE = "../data/250103.csv"
 TOP_N = 4                 # 取前 N 个最大振幅段（互不重叠）
 RETRACE_FRAC = 0.50       # 动态回撤阈值（例如 0.50 即 50%）
 MIN_LEN = 5               # 最小段长度（点数）

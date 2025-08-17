@@ -5,6 +5,7 @@ import pandas as pd
 import torch
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
+import joblib
 
 from model import TransformerClassifier
 from feature_engineering import add_features
@@ -12,6 +13,7 @@ from feature_engineering import add_features
 # 配置参数
 SEQ_LEN = 30
 MODEL_PATH = "../model/best_longtrend_model.pth"
+SCALER_PATH = "../model/scaler.pkl"  # 标准化参数保存路径
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def load_model(input_dim, num_classes=5):
@@ -32,6 +34,18 @@ def load_model(input_dim, num_classes=5):
     print("模型加载成功")
     return model
 
+def load_scaler():
+    """
+    加载训练时保存的标准化参数
+    """
+    if os.path.exists(SCALER_PATH):
+        scaler = joblib.load(SCALER_PATH)
+        print("标准化参数加载成功")
+        return scaler
+    else:
+        print("未找到标准化参数文件，将使用默认标准化")
+        return StandardScaler()
+
 def prepare_data_for_prediction(df):
     """
     为预测准备数据
@@ -44,9 +58,16 @@ def prepare_data_for_prediction(df):
     feature_cols = [col for col in df.columns if col not in exclude_cols]
     features = df[feature_cols].values
     
-    # 标准化（需要使用训练时的scaler）
-    scaler = StandardScaler()
-    features = scaler.fit_transform(features)  # 注意：实际应用中应该加载训练时保存的scaler
+    # 加载训练时的标准化参数
+    scaler = load_scaler()
+    
+    # 标准化
+    if hasattr(scaler, 'scale_'):
+        # 如果scaler已拟合，则直接转换
+        features = scaler.transform(features)
+    else:
+        # 如果scaler未拟合，则拟合并转换（仅用于测试）
+        features = scaler.fit_transform(features)
     
     return features, df['index_value'].values if 'index_value' in df.columns else None
 
@@ -101,7 +122,7 @@ def generate_trading_signals(model, X, index_values=None):
     
     return signals
 
-def identify_trading_points(signals, min_hold_period=5):
+def identify_trading_points(signals, min_hold_period=3):
     """
     根据信号识别交易点 - 五分类版本
     """
@@ -121,13 +142,13 @@ def identify_trading_points(signals, min_hold_period=5):
         # 获取当前动作类型的概率
         action_prob = signal['probability'][action_type]
         
-        # 对于高置信度的交易动作信号进行处理
-        if action_type != 0 and action_prob > 0.80:  # 高置信度阈值
+        # 对于中等置信度的交易动作信号进行处理（降低阈值以获得更多信号）
+        if action_type != 0 and action_prob > 0.70:  # 降低置信度阈值
             # 避免频繁的相反操作
             if last_action is not None:
                 # 如果上一个动作是做多开仓，下一个不应该是做空开仓
                 if (last_action == 1 and action_type == 3) or (last_action == 3 and action_type == 1):
-                    if action_prob < 0.95:  # 置信度不够高则跳过
+                    if action_prob < 0.90:  # 置信度不够高则跳过
                         i += 1
                         continue
             
@@ -362,6 +383,7 @@ def calculate_trading_statistics(actions, index_values):
         'average_profit': total_profit / total_trades if total_trades > 0 else 0,
         'trade_details': trade_details
     }
+
 def predict_and_generate_signals(csv_file):
     """
     主函数：加载数据、模型预测、生成交易信号
@@ -406,7 +428,7 @@ def predict_and_generate_signals(csv_file):
         print(f"  {action_names[i]}: {count} ({percentage:.1f}%)")
     
     # 7. 识别交易点
-    actions = identify_trading_points(signals)
+    actions = identify_trading_points(signals, min_hold_period=3)
     print(f"识别到 {len(actions)} 个交易动作")
     
     # 8. 应用风险管理
@@ -451,5 +473,5 @@ def predict_and_generate_signals(csv_file):
 if __name__ == "__main__":
     # 使用示例
     # 请替换为实际的CSV文件路径
-    csv_file_path = "../predict/250813.csv"  # 替换为实际文件路径
+    csv_file_path = "../predict/250814.csv"  # 替换为实际文件路径
     predict_and_generate_signals(csv_file_path)
