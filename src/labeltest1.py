@@ -5,7 +5,7 @@ from scipy.signal import find_peaks
 from matplotlib.patches import Rectangle
 
 # ==== 参数 ====
-csv_file = "240112.csv"   # 你的CSV文件
+csv_file = "../data/250103.csv"   # 你的CSV文件
 min_len = 5             # 最小时长（数据点数）
 min_amp = 0.5           # 最小振幅
 max_retrace = 0.5       # 最大允许回撤比例

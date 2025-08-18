@@ -210,7 +210,8 @@ __marimo__/
 data/
 label/
 .git
-model/
+model/*.pth
 *.csv
 .idea/
 .vscode/
+

@@ -1,90 +1,149 @@
-# feature_engineering.py
-import numpy as np
 import pandas as pd
+import numpy as np
+from scipy.signal import find_peaks
 
 def add_features(df):
-    # 原始特征工程
-    df['a_diff'] = df['a'].diff().fillna(0)
-    df['b_diff'] = df['b'].diff().fillna(0)
-    df['c_diff'] = df['c'].diff().fillna(0)
-    df['d_diff'] = df['d'].diff().fillna(0)
-
-    df['a_roll_mean_5'] = df['a'].rolling(window=5).mean().bfill()
-    df['b_roll_mean_5'] = df['b'].rolling(window=5).mean().bfill()
-    df['c_roll_mean_5'] = df['c'].rolling(window=5).mean().bfill()
-    df['d_roll_mean_5'] = df['d'].rolling(window=5).mean().bfill()
+    """
+    为数据添加特征，仅使用index_value, a, b, c, d列
+    """
+    df = df.copy()
     
-    # 增强特征工程
+    # 基础特征
+    df['index_value_pct_change'] = df['index_value'].pct_change().replace([np.inf, -np.inf], np.nan)
+    df['a_pct_change'] = df['a'].pct_change().replace([np.inf, -np.inf], np.nan)
+    df['b_pct_change'] = df['b'].pct_change().replace([np.inf, -np.inf], np.nan)
+    df['c_pct_change'] = df['c'].pct_change().replace([np.inf, -np.inf], np.nan)
+    df['d_pct_change'] = df['d'].pct_change().replace([np.inf, -np.inf], np.nan)
     
-    # 更多滚动窗口统计特征
-    for window in [10, 20]:
-        df[f'a_roll_mean_{window}'] = df['a'].rolling(window=window).mean().bfill()
-        df[f'b_roll_mean_{window}'] = df['b'].rolling(window=window).mean().bfill()
-        df[f'c_roll_mean_{window}'] = df['c'].rolling(window=window).mean().bfill()
-        df[f'd_roll_mean_{window}'] = df['d'].rolling(window=window).mean().bfill()
+    # 移动平均线特征
+    for window in [5, 10, 20]:
+        df[f'index_value_ma_{window}'] = df['index_value'].rolling(window=window).mean()
+        df[f'a_ma_{window}'] = df['a'].rolling(window=window).mean()
+        df[f'b_ma_{window}'] = df['b'].rolling(window=window).mean()
+        df[f'c_ma_{window}'] = df['c'].rolling(window=window).mean()
+        df[f'd_ma_{window}'] = df['d'].rolling(window=window).mean()
         
-        df[f'a_roll_std_{window}'] = df['a'].rolling(window=window).std().bfill()
-        df[f'b_roll_std_{window}'] = df['b'].rolling(window=window).std().bfill()
-        df[f'c_roll_std_{window}'] = df['c'].rolling(window=window).std().bfill()
-        df[f'd_roll_std_{window}'] = df['d'].rolling(window=window).std().bfill()
+        # 价格与均线的关系
+        df[f'index_value_above_ma_{window}'] = (df['index_value'] > df[f'index_value_ma_{window}']).astype(int)
+        df[f'a_above_ma_{window}'] = (df['a'] > df[f'a_ma_{window}']).astype(int)
+        df[f'b_above_ma_{window}'] = (df['b'] > df[f'b_ma_{window}']).astype(int)
+        df[f'c_above_ma_{window}'] = (df['c'] > df[f'c_ma_{window}']).astype(int)
+        df[f'd_above_ma_{window}'] = (df['d'] > df[f'd_ma_{window}']).astype(int)
+    
+    # 新增特征1：a,b,c与index_value趋势一致性
+    df['abc_trend_consistency'] = 0
+    trend_window = 5  # 考虑5个点的趋势
+    for i in range(trend_window, len(df)):
+        # 计算index_value的趋势
+        index_trend = df['index_value'].iloc[i] - df['index_value'].iloc[i-trend_window]
+        # 计算a,b,c的趋势
+        a_trend = df['a'].iloc[i] - df['a'].iloc[i-trend_window]
+        b_trend = df['b'].iloc[i] - df['b'].iloc[i-trend_window]
+        c_trend = df['c'].iloc[i] - df['c'].iloc[i-trend_window]
+        
+        # 判断趋势一致性（同向为正）
+        consistent_count = 0
+        if (index_trend > 0 and a_trend > 0) or (index_trend < 0 and a_trend < 0):
+            consistent_count += 1
+        if (index_trend > 0 and b_trend > 0) or (index_trend < 0 and b_trend < 0):
+            consistent_count += 1
+        if (index_trend > 0 and c_trend > 0) or (index_trend < 0 and c_trend < 0):
+            consistent_count += 1
+            
+        df.loc[i, 'abc_trend_consistency'] = consistent_count / 3.0  # 一致性比例
+    
+    # 新增特征2：反转信号特征
+    df['reversal_signal'] = 0
+    lookback_window = 5
+    for i in range(lookback_window, len(df)):
+        current_idx = df['index_value'].iloc[i]
+        prev_idx = df['index_value'].iloc[i-lookback_window]
+        
+        if current_idx > prev_idx:  # index_value上涨
+            current_a, prev_a = df['a'].iloc[i], df['a'].iloc[i-lookback_window]
+            current_b, prev_b = df['b'].iloc[i], df['b'].iloc[i-lookback_window]
+            current_c, prev_c = df['c'].iloc[i], df['c'].iloc[i-lookback_window]
+            current_d, prev_d = df['d'].iloc[i], df['d'].iloc[i-lookback_window]
+            
+            # a,b,c都下跌且d不反对（也下跌或持平）
+            if (current_a < prev_a and current_b < prev_b and current_c < prev_c and 
+                (current_d <= prev_d)):
+                df.loc[i, 'reversal_signal'] = -1  # 可能的下跌反转
+        else:  # index_value下跌
+            current_a, prev_a = df['a'].iloc[i], df['a'].iloc[i-lookback_window]
+            current_b, prev_b = df['b'].iloc[i], df['b'].iloc[i-lookback_window]
+            current_c, prev_c = df['c'].iloc[i], df['c'].iloc[i-lookback_window]
+            current_d, prev_d = df['d'].iloc[i], df['d'].iloc[i-lookback_window]
+            
+            # a,b,c都上涨且d不反对（也上涨或持平）
+            if (current_a > prev_a and current_b > prev_b and current_c > prev_c and 
+                (current_d >= prev_d)):
+                df.loc[i, 'reversal_signal'] = 1  # 可能的上涨反转
+    
+    # 新增特征3：峰值和谷值特征
+    # 找到index_value的峰值和谷值点
+    peaks, _ = find_peaks(df['index_value'], distance=5)  # 峰值点
+    valleys, _ = find_peaks(-df['index_value'], distance=5)  # 谷值点（对负值找峰值）
+    
+    df['is_peak'] = 0
+    df['is_valley'] = 0
+    df['peak_valley_distance'] = 0  # 距离最近的峰/谷的距离
+    
+    # 标记峰/谷点
+    df.loc[peaks, 'is_peak'] = 1
+    df.loc[valleys, 'is_valley'] = 1
+    
+    # 计算距离最近的峰/谷的距离
+    for i in range(len(df)):
+        # 找到最近的峰
+        peak_distances = np.abs(peaks - i) if len(peaks) > 0 else np.array([len(df)])
+        nearest_peak_dist = np.min(peak_distances) if len(peak_distances) > 0 else len(df)
+        
+        # 找到最近的谷
+        valley_distances = np.abs(valleys - i) if len(valleys) > 0 else np.array([len(df)])
+        nearest_valley_dist = np.min(valley_distances) if len(valley_distances) > 0 else len(df)
+        
+        # 取最近的距离
+        df.loc[i, 'peak_valley_distance'] = min(nearest_peak_dist, nearest_valley_dist)
+    
+    # 价格波动特征
+    df['volatility'] = df['index_value'].rolling(window=10).std()
+    df['price_range'] = df['index_value'].rolling(window=10).max() - df['index_value'].rolling(window=10).min()
     
     # 滞后特征
     for lag in [1, 2, 3, 5]:
-        df[f'a_lag_{lag}'] = df['a'].shift(lag).bfill()
-        df[f'b_lag_{lag}'] = df['b'].shift(lag).bfill()
-        df[f'c_lag_{lag}'] = df['c'].shift(lag).bfill()
-        df[f'd_lag_{lag}'] = df['d'].shift(lag).bfill()
+        df[f'index_value_lag_{lag}'] = df['index_value'].shift(lag)
+        df[f'index_value_pct_change_lag_{lag}'] = df['index_value_pct_change'].shift(lag)
+        df[f'a_lag_{lag}'] = df['a'].shift(lag)
+        df[f'b_lag_{lag}'] = df['b'].shift(lag)
+        df[f'c_lag_{lag}'] = df['c'].shift(lag)
+        df[f'd_lag_{lag}'] = df['d'].shift(lag)
     
-    # 比率特征
-    df['a_b_ratio'] = np.where(df['b'] != 0, df['a'] / df['b'], 0)
-    df['c_d_ratio'] = np.where(df['d'] != 0, df['c'] / df['d'], 0)
+    # 差分特征
+    for diff in [1, 2, 3]:
+        df[f'index_value_diff_{diff}'] = df['index_value'].diff(diff)
+        df[f'a_diff_{diff}'] = df['a'].diff(diff)
+        df[f'b_diff_{diff}'] = df['b'].diff(diff)
+        df[f'c_diff_{diff}'] = df['c'].diff(diff)
+        df[f'd_diff_{diff}'] = df['d'].diff(diff)
     
-    # 交叉特征
-    df['a_c_interaction'] = df['a'] * df['c']
-    df['b_d_interaction'] = df['b'] * df['d']
+    # 填充缺失值
+    df.fillna(method='bfill', inplace=True)
+    df.fillna(method='ffill', inplace=True)
     
-    # 波动率特征
-    df['a_volatility'] = df['a_diff'].rolling(window=10).std().bfill()
-    df['b_volatility'] = df['b_diff'].rolling(window=10).std().bfill()
-    df['c_volatility'] = df['c_diff'].rolling(window=10).std().bfill()
-    df['d_volatility'] = df['d_diff'].rolling(window=10).std().bfill()
+    # 替换无穷大值和过大值
+    numeric_columns = df.select_dtypes(include=[np.number]).columns
+    for col in numeric_columns:
+        # 替换无穷大值为NaN
+        df[col] = df[col].replace([np.inf, -np.inf], np.nan)
+        # 将过大值限制在合理范围内
+        if df[col].dtype == np.float64:
+            # 对于浮点数，限制在±1e6范围内
+            df[col] = np.clip(df[col], -1e6, 1e6)
     
-    # RSI风格指标（简化版）
-    def calculate_simple_rsi(series, window=14):
-        delta = series.diff()
-        gain = delta.where(delta > 0, 0).rolling(window=window).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-        rs = np.where(loss != 0, gain / loss, 0)
-        rsi = 100 - (100 / (1 + rs))
-        # 将numpy数组转换为pandas Series后使用bfill
-        return pd.Series(rsi).bfill().values
-    
-    df['a_rsi'] = calculate_simple_rsi(df['a'])
-    df['b_rsi'] = calculate_simple_rsi(df['b'])
-    df['c_rsi'] = calculate_simple_rsi(df['c'])
-    df['d_rsi'] = calculate_simple_rsi(df['d'])
-    
-    # 布林带风格特征
-    def calculate_simple_bbands(series, window=20):
-        middle = series.rolling(window=window).mean()
-        std = series.rolling(window=window).std()
-        upper = middle + 2 * std
-        lower = middle - 2 * std
-        # 对numpy数组使用pandas方法需要转换
-        return pd.Series(upper).bfill().values, pd.Series(middle).bfill().values, pd.Series(lower).bfill().values
-    
-    a_bb_upper, a_bb_middle, a_bb_lower = calculate_simple_bbands(df['a'])
-    b_bb_upper, b_bb_middle, b_bb_lower = calculate_simple_bbands(df['b'])
-    c_bb_upper, c_bb_middle, c_bb_lower = calculate_simple_bbands(df['c'])
-    d_bb_upper, d_bb_middle, d_bb_lower = calculate_simple_bbands(df['d'])
-    
-    df['a_bb_position'] = np.where((a_bb_upper - a_bb_lower) != 0, 
-                                   (df['a'] - a_bb_lower) / (a_bb_upper - a_bb_lower), 0.5)
-    df['b_bb_position'] = np.where((b_bb_upper - b_bb_lower) != 0, 
-                                   (df['b'] - b_bb_lower) / (b_bb_upper - b_bb_lower), 0.5)
-    df['c_bb_position'] = np.where((c_bb_upper - c_bb_lower) != 0, 
-                                   (df['c'] - c_bb_lower) / (c_bb_upper - c_bb_lower), 0.5)
-    df['d_bb_position'] = np.where((d_bb_upper - d_bb_lower) != 0, 
-                                   (df['d'] - d_bb_lower) / (d_bb_upper - d_bb_lower), 0.5)
+    # 再次填充NaN值
+    df.fillna(method='bfill', inplace=True)
+    df.fillna(method='ffill', inplace=True)
+    df.fillna(0, inplace=True)  # 最后用0填充任何剩余的NaN值
     
     return df
