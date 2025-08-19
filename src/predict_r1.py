@@ -103,16 +103,6 @@ def predict_with_supervised_model(model, X, feature_cols):
     
     return preds, probs
 
-def predict_with_hybrid_agent(agent, features):
-    """
-    使用混合智能体进行预测
-    """
-    actions = []
-    for i in range(len(features)):
-        action = agent.get_hybrid_action(features, i, 0)  # position设为0（无持仓）
-        actions.append(action)
-    return np.array(actions)
-
 def plot_trading_signals(index_values, predictions, probabilities=None, title="Trading Signals"):
     """
     绘制交易信号图

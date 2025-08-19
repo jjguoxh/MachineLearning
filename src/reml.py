@@ -45,6 +45,8 @@ class TradingEnvironment:
         self.position = 0  # 0: 无仓位, 1: 多头, -1: 空头
         self.position_entry_price = 0
         self.total_reward = 0
+        self.max_position_duration = 20  # 最大持仓时间
+        self.position_duration = 0  # 当前持仓时间
         
         # 状态维度
         self.observation_space = self.features.shape[1] * SEQ_LEN
@@ -59,6 +61,7 @@ class TradingEnvironment:
         self.position = 0
         self.position_entry_price = 0
         self.total_reward = 0
+        self.position_duration = 0
         return self._get_state()
     
     def _get_state(self):
@@ -80,31 +83,59 @@ class TradingEnvironment:
         reward = 0
         current_price = self.prices[self.current_step]
         
+        # 基础奖励计算
+        price_change = current_price - self.prices[self.current_step-1] if self.current_step > 0 else 0
+        
         # 根据动作执行交易
         if action == 1 and self.position <= 0:  # 买入/做多
             if self.position < 0:  # 平空仓
-                reward = (self.position_entry_price - current_price) - \
-                         (self.position_entry_price + current_price) * self.transaction_cost
-                self.balance += reward
+                profit = (self.position_entry_price - current_price) 
+                reward = profit - (self.position_entry_price + current_price) * self.transaction_cost
+                self.balance += profit - (self.position_entry_price + current_price) * self.transaction_cost
             self.position = 1
             self.position_entry_price = current_price
+            self.position_duration = 0
             reward -= current_price * self.transaction_cost  # 扣除交易费用
             
         elif action == 2 and self.position >= 0:  # 卖出/做空
             if self.position > 0:  # 平多仓
-                reward = (current_price - self.position_entry_price) - \
-                         (self.position_entry_price + current_price) * self.transaction_cost
-                self.balance += reward
+                profit = (current_price - self.position_entry_price)
+                reward = profit - (self.position_entry_price + current_price) * self.transaction_cost
+                self.balance += profit - (self.position_entry_price + current_price) * self.transaction_cost
             self.position = -1
             self.position_entry_price = current_price
+            self.position_duration = 0
             reward -= current_price * self.transaction_cost  # 扣除交易费用
             
         # 如果持仓，计算持仓盈亏
         elif self.position != 0:
+            self.position_duration += 1
             if self.position > 0:  # 多头持仓
-                reward = current_price - self.prices[self.current_step-1]
+                reward = price_change
             else:  # 空头持仓
-                reward = self.prices[self.current_step-1] - current_price
+                reward = -price_change
+        
+        # 添加持仓时间惩罚，避免频繁交易
+        if self.position != 0:
+            reward -= 0.01  # 每步持仓成本
+            
+        # 添加超时平仓机制
+        if self.position_duration >= self.max_position_duration:
+            if self.position > 0:  # 强制平多
+                profit = (current_price - self.position_entry_price)
+                reward += profit - (self.position_entry_price + current_price) * self.transaction_cost
+                self.balance += profit - (self.position_entry_price + current_price) * self.transaction_cost
+            elif self.position < 0:  # 强制平空
+                profit = (self.position_entry_price - current_price)
+                reward += profit - (self.position_entry_price + current_price) * self.transaction_cost
+                self.balance += profit - (self.position_entry_price + current_price) * self.transaction_cost
+            self.position = 0
+            self.position_entry_price = 0
+            self.position_duration = 0
+        
+        # 添加不必要交易的惩罚
+        if action != 0 and ((self.position == 1 and action == 1) or (self.position == -1 and action == 2)):
+            reward -= 0.1  # 重复操作惩罚
         
         # 更新总奖励
         self.total_reward += reward
@@ -151,11 +182,11 @@ class DQNAgent:
     """
     DQN智能体
     """
-    def __init__(self, state_dim, action_dim, lr=1e-3, gamma=0.95, epsilon=1.0, epsilon_decay=0.995, epsilon_min=0.01):
+    def __init__(self, state_dim, action_dim, lr=1e-3, gamma=0.99, epsilon=1.0, epsilon_decay=0.995, epsilon_min=0.01):
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.lr = lr
-        self.gamma = gamma
+        self.gamma = gamma  # 增加gamma值以更重视未来奖励
         self.epsilon = epsilon
         self.epsilon_decay = epsilon_decay
         self.epsilon_min = epsilon_min
@@ -166,8 +197,8 @@ class DQNAgent:
         self.optimizer = optim.Adam(self.q_network.parameters(), lr=lr)
         
         # 经验回放
-        self.memory = deque(maxlen=10000)
-        self.batch_size = 64
+        self.memory = deque(maxlen=50000)  # 增加经验回放大小
+        self.batch_size = 128  # 增加批量大小
         
         # 更新目标网络
         self.update_target_network()
@@ -225,6 +256,8 @@ class DQNAgent:
         # 优化
         self.optimizer.zero_grad()
         loss.backward()
+        # 添加梯度裁剪
+        torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), 1.0)
         self.optimizer.step()
         
         # 降低epsilon
@@ -337,7 +370,7 @@ class HybridTradingAgent:
         else:
             return 0  # 持有
     
-    def train_rl_agent(self, data_file, episodes=100):
+    def train_rl_agent(self, data_file, episodes=100, eval_interval=10):
         """
         训练强化学习智能体
         """
@@ -347,8 +380,14 @@ class HybridTradingAgent:
         # 初始化RL智能体
         self.rl_agent = DQNAgent(
             state_dim=env.observation_space,
-            action_dim=env.action_space
+            action_dim=env.action_space,
+            gamma=0.99,  # 增加对未来奖励的重视
+            lr=1e-3,
+            epsilon_decay=0.99  # 调整epsilon衰减速度
         )
+        
+        # 记录最佳性能
+        best_reward = -float('inf')
         
         # 训练循环
         for episode in range(episodes):
@@ -374,10 +413,45 @@ class HybridTradingAgent:
                 self.rl_agent.replay()
             
             # 更新目标网络
-            if episode % 10 == 0:
+            if episode % 5 == 0:
                 self.rl_agent.update_target_network()
                 
-            print(f"Episode {episode+1}/{episodes}, Total Reward: {total_reward:.2f}, Epsilon: {self.rl_agent.epsilon:.4f}")
+            # 评估模型性能
+            if episode % eval_interval == 0:
+                eval_reward = self._evaluate_agent(data_file)
+                print(f"Episode {episode+1}/{episodes}, Total Reward: {total_reward:.2f}, Epsilon: {self.rl_agent.epsilon:.4f}, Eval Reward: {eval_reward:.2f}")
+                
+                # 保存最佳模型
+                if eval_reward > best_reward:
+                    best_reward = eval_reward
+                    # 保存模型（可选）
+            else:
+                print(f"Episode {episode+1}/{episodes}, Total Reward: {total_reward:.2f}, Epsilon: {self.rl_agent.epsilon:.4f}")
+    
+    def _evaluate_agent(self, data_file, eval_episodes=1):
+        """
+        评估智能体性能
+        """
+        if self.rl_agent is None:
+            return 0
+            
+        env = TradingEnvironment(data_file)
+        total_rewards = []
+        
+        for _ in range(eval_episodes):
+            state = env.reset()
+            done = False
+            while not done:
+                # 使用评估模式（不探索）
+                state_tensor = torch.FloatTensor(state).unsqueeze(0).to(DEVICE)
+                q_values = self.rl_agent.q_network(state_tensor)
+                action = np.argmax(q_values.cpu().data.numpy())
+                
+                state, reward, done, info = env.step(action)
+                
+            total_rewards.append(info['total_reward'])
+            
+        return np.mean(total_rewards)
     
     def get_hybrid_action(self, features, current_step, position):
         """
@@ -399,9 +473,14 @@ class HybridTradingAgent:
         # 获取RL智能体动作
         rl_action = self.rl_agent.act(state)
         
-        # 简单融合策略：当监督学习和RL智能体建议一致时，优先执行
-        # 否则根据置信度或其他策略决定
-        return rl_action  # 这里简单返回RL动作，实际可以更复杂
+        # 融合策略：基于置信度和状态的智能融合
+        # 当RL智能体置信度高时，更多依赖RL；否则依赖监督学习
+        if self.rl_agent.epsilon < 0.1:  # RL训练充分时
+            # 使用RL动作
+            return rl_action
+        else:
+            # 更多依赖监督学习
+            return supervised_action
 
 def train_reinforcement_learning_strategy(data_file, model_path=MODEL_PATH, scaler_path=SCALER_PATH):
     """
@@ -414,7 +493,7 @@ def train_reinforcement_learning_strategy(data_file, model_path=MODEL_PATH, scal
     
     # 训练RL智能体
     print("训练强化学习智能体...")
-    agent.train_rl_agent(data_file, episodes=50)
+    agent.train_rl_agent(data_file, episodes=100)
     
     print("强化学习策略训练完成!")
     return agent
@@ -482,4 +561,5 @@ if __name__ == "__main__":
     data_file = "../data/250814.csv"  # 替换为实际数据文件路径
     trained_agent = train_reinforcement_learning_strategy(data_file)
     results = backtest_hybrid_strategy(data_file, trained_agent)
-    pass
+    print("回测结果:", results)
+    save_scaler(trained_agent.scaler)
