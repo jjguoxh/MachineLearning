@@ -18,7 +18,7 @@ from scipy.signal import find_peaks
 # ========= 可调参数 =========
 INPUT_DIR = "../data/"  # 输入CSV文件目录
 OUTPUT_DIR = "../label/"  # 输出标签文件目录
-TOP_N = 5        # 每天取前 N 个最大振幅段（互不重叠）
+TOP_N = 3        # 每天取前 N 个最大振幅段（互不重叠）
 RETRACE_FRAC = 0.50  # 动态回撤阈值（例如 0.50 即 50%）
 MIN_LEN = 5      # 最小段长度（点数）
 MIN_AMP = 0.0    # 最小振幅门槛（可设 >0 过滤噪声）
@@ -458,10 +458,10 @@ def generate_labels_for_file(csv_file_path, output_dir):
         return
     
     # 使用true_index_value进行趋势检测
-    true_prices = df['true_index_value'].values
+    true_index_value = df['true_index_value'].values
     
     # 查找趋势段
-    segments = find_trend_segments(true_prices, min_amplitude=20, retrace_frac=0.5)
+    segments = find_trend_segments(true_index_value, min_amplitude=20, retrace_frac=0.5)
     
     # 合并相邻的同向趋势段
     # merged_segments = merge_trend_segments(segments)
@@ -476,31 +476,65 @@ def generate_labels_for_file(csv_file_path, output_dir):
     # 标签定义：0-无操作, 1-做多开仓, 2-做多平仓, 3-做空开仓, 4-做空平仓
     labels = np.zeros(len(df), dtype=int)
     
-    # 只标记动作点（开仓和平仓点），不标记持仓期间的点
-    action_points = set()  # 记录已标记的动作点
+    # 存储所有动作点及其类型
+    actions = {}  # 索引 -> [动作类型列表]
     
+    # 首先标记所有选中的段
     for seg in selected:
         i1, i2 = seg["i1"], seg["i2"]
         # 确保索引在有效范围内
         i1 = max(0, min(i1, len(labels) - 1))
         i2 = max(0, min(i2, len(labels) - 1))
         
-        # 避免动作点重叠
-        if i1 not in action_points and i2 not in action_points:
-            if seg["dir"] == 1:  # 上涨趋势
-                # 趋势开始点：做多开仓
-                labels[i1] = 1
-                action_points.add(i1)
-                # 趋势结束点：做多平仓
-                labels[i2] = 2
-                action_points.add(i2)
-            elif seg["dir"] == -1:  # 下跌趋势
-                # 趋势开始点：做空开仓
-                labels[i1] = 3
-                action_points.add(i1)
-                # 趋势结束点：做空平仓
-                labels[i2] = 4
-                action_points.add(i2)
+        # 记录开仓动作
+        if i1 not in actions:
+            actions[i1] = []
+        if seg["dir"] == 1:  # 上涨趋势
+            actions[i1].append(1)  # 做多开仓
+        else:  # 下跌趋势
+            actions[i1].append(3)  # 做空开仓
+            
+        # 记录平仓动作
+        if i2 not in actions:
+            actions[i2] = []
+        if seg["dir"] == 1:  # 上涨趋势
+            actions[i2].append(2)  # 做多平仓
+        else:  # 下跌趋势
+            actions[i2].append(4)  # 做空平仓
+    
+    # 处理同一位置的多个动作
+    # 如果一个点既是平仓点又是开仓点，需要在下一个点标记开仓动作
+    for idx in sorted(actions.keys()):
+        action_list = actions[idx]
+        
+        # 检查是否同时包含平仓和开仓动作
+        has_close_action = any(action in [2, 4] for action in action_list)  # 平仓动作
+        has_open_action = any(action in [1, 3] for action in action_list)   # 开仓动作
+        
+        # 如果只有平仓动作，直接标记
+        if has_close_action and not has_open_action:
+            # 如果有多个平仓动作，选择第一个
+            close_actions = [action for action in action_list if action in [2, 4]]
+            labels[idx] = close_actions[0]
+        # 如果只有开仓动作，直接标记
+        elif has_open_action and not has_close_action:
+            # 如果有多个开仓动作，选择第一个
+            open_actions = [action for action in action_list if action in [1, 3]]
+            labels[idx] = open_actions[0]
+        # 如果既有平仓又有开仓动作
+        elif has_close_action and has_open_action:
+            # 平仓动作在当前点标记
+            close_actions = [action for action in action_list if action in [2, 4]]
+            labels[idx] = close_actions[0]
+            
+            # 开仓动作在下一个点标记（如果下一个点在范围内）
+            if idx + 1 < len(labels):
+                open_actions = [action for action in action_list if action in [1, 3]]
+                labels[idx + 1] = open_actions[0]
+                print(f"[Info] 在位置 {idx} 平仓，并在位置 {idx+1} 开仓")
+        # 其他情况（只有相同类型动作）
+        else:
+            labels[idx] = action_list[0]
     
     # 创建结果DataFrame
     result_df = df.copy()
