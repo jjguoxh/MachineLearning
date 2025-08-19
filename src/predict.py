@@ -132,7 +132,7 @@ def predict(model, X, use_multiscale=False):
         preds = torch.argmax(outputs, dim=1).cpu().numpy()
         return preds, probs.cpu().numpy()
 
-def plot_trading_signals(index_values, predictions, use_multiscale=False):
+def plot_trading_signals(index_values, predictions, probabilities, use_multiscale=False):
     """
     绘制价格曲线和交易信号
     """
@@ -151,19 +151,238 @@ def plot_trading_signals(index_values, predictions, use_multiscale=False):
     short_entry_points = []  # 做空开仓点 (label=3)
     short_exit_points = []   # 做空平仓点 (label=4)
     
+    # 存储交易信号及其置信度
+    long_trades = []   # 存储做多交易 (开仓点, 平仓点, 置信度)
+    short_trades = []  # 存储做空交易 (开仓点, 平仓点, 置信度)
+    
+    # 收集所有信号点及其置信度
+    all_long_entries = []
+    all_long_exits = []
+    all_short_entries = []
+    all_short_exits = []
+    
     for i, pred in enumerate(predictions):
         idx = i + start_idx
         if idx >= len(index_values):
             break
             
         if pred == 1:  # 做多开仓
-            long_entry_points.append((idx, index_values[idx]))
+            confidence = probabilities[i][1]  # 开仓置信度
+            all_long_entries.append((idx, index_values[idx], confidence, i))
         elif pred == 2:  # 做多平仓
-            long_exit_points.append((idx, index_values[idx]))
+            confidence = probabilities[i][2]  # 平仓置信度
+            all_long_exits.append((idx, index_values[idx], confidence, i))
         elif pred == 3:  # 做空开仓
-            short_entry_points.append((idx, index_values[idx]))
+            confidence = probabilities[i][3]  # 开仓置信度
+            all_short_entries.append((idx, index_values[idx], confidence, i))
         elif pred == 4:  # 做空平仓
-            short_exit_points.append((idx, index_values[idx]))
+            confidence = probabilities[i][4]  # 平仓置信度
+            all_short_exits.append((idx, index_values[idx], confidence, i))
+    
+    # 配对交易信号并过滤掉会立即亏损的交易
+    # 做多交易配对
+    for entry in all_long_entries:
+        entry_idx, entry_price, entry_conf, entry_i = entry
+        # 寻找最近的平仓信号
+        for exit in all_long_exits:
+            exit_idx, exit_price, exit_conf, exit_i = exit
+            if exit_idx > entry_idx:  # 平仓点必须在开仓点之后
+                # 检查开仓后短期内是否立即向相反方向运行（避免立即大幅亏损）
+                max_adverse_excursion = 0  # 最大不利波动
+                adverse_threshold = 0.005  # 0.5%的不利波动阈值
+                
+                # 检查开仓后到平仓前的价格波动
+                min_price_after_entry = entry_price
+                for j in range(entry_idx+1, min(exit_idx, len(index_values))):
+                    current_price = index_values[j]
+                    if current_price < min_price_after_entry:
+                        min_price_after_entry = current_price
+                        max_adverse_excursion = (entry_price - min_price_after_entry) / entry_price
+                        if max_adverse_excursion > adverse_threshold:
+                            # 立即向相反方向运行超过阈值，跳过这笔交易
+                            break
+                
+                # 如果没有立即大幅向相反方向运行
+                if max_adverse_excursion <= adverse_threshold:
+                    avg_confidence = (entry_conf + exit_conf) / 2
+                    expected_profit = (exit_price - entry_price) / entry_price
+                    long_trades.append({
+                        'entry_idx': entry_idx,
+                        'entry_price': entry_price,
+                        'exit_idx': exit_idx,
+                        'exit_price': exit_price,
+                        'confidence': avg_confidence,
+                        'expected_profit': expected_profit,
+                        'max_adverse_excursion': max_adverse_excursion,
+                        'entry_i': entry_i,
+                        'exit_i': exit_i
+                    })
+                break  # 只取最近的一个平仓信号
+    
+    # 做空交易配对
+    for entry in all_short_entries:
+        entry_idx, entry_price, entry_conf, entry_i = entry
+        # 寻找最近的平仓信号
+        for exit in all_short_exits:
+            exit_idx, exit_price, exit_conf, exit_i = exit
+            if exit_idx > entry_idx:  # 平仓点必须在开仓点之后
+                # 检查开仓后短期内是否立即向相反方向运行（避免立即大幅亏损）
+                max_adverse_excursion = 0  # 最大不利波动
+                adverse_threshold = 0.005  # 0.5%的不利波动阈值
+                
+                # 检查开仓后到平仓前的价格波动
+                max_price_after_entry = entry_price
+                for j in range(entry_idx+1, min(exit_idx, len(index_values))):
+                    current_price = index_values[j]
+                    if current_price > max_price_after_entry:
+                        max_price_after_entry = current_price
+                        max_adverse_excursion = (max_price_after_entry - entry_price) / entry_price
+                        if max_adverse_excursion > adverse_threshold:
+                            # 立即向相反方向运行超过阈值，跳过这笔交易
+                            break
+                
+                # 如果没有立即大幅向相反方向运行
+                if max_adverse_excursion <= adverse_threshold:
+                    avg_confidence = (entry_conf + exit_conf) / 2
+                    expected_profit = (entry_price - exit_price) / entry_price
+                    short_trades.append({
+                        'entry_idx': entry_idx,
+                        'entry_price': entry_price,
+                        'exit_idx': exit_idx,
+                        'exit_price': exit_price,
+                        'confidence': avg_confidence,
+                        'expected_profit': expected_profit,
+                        'max_adverse_excursion': max_adverse_excursion,
+                        'entry_i': entry_i,
+                        'exit_i': exit_i
+                    })
+                break  # 只取最近的一个平仓信号
+    
+    # 如果配对后的完整交易太少，则退而求其次，只显示高置信度的信号点（但也要满足不会立即大幅亏损）
+    min_trades = 5
+    top_trades = []
+    
+    if len(long_trades) + len(short_trades) < min_trades:
+        print("完整交易对不足，显示高置信度且不会立即亏损的信号点...")
+        # 收集所有信号点并过滤掉会立即亏损的信号
+        all_signals = []
+        
+        # 添加做多开仓信号（过滤掉会立即亏损的）
+        for entry in all_long_entries:
+            entry_idx, entry_price, confidence, i = entry
+            # 检查开仓后短期内是否立即向相反方向运行
+            will_immediately_lose = False
+            adverse_threshold = 0.005  # 0.5%的不利波动阈值
+            
+            # 检查开仓后几个点的价格变化
+            look_ahead = min(10, len(index_values) - entry_idx - 1)  # 最多看10个点
+            min_price_after_entry = entry_price
+            for j in range(entry_idx+1, entry_idx+1+look_ahead):
+                current_price = index_values[j]
+                if current_price < min_price_after_entry:
+                    min_price_after_entry = current_price
+                    max_adverse_excursion = (entry_price - min_price_after_entry) / entry_price
+                    if max_adverse_excursion > adverse_threshold:
+                        will_immediately_lose = True
+                        break
+            
+            if not will_immediately_lose:
+                all_signals.append({
+                    'type': 'long_entry',
+                    'idx': entry_idx,
+                    'price': entry_price,
+                    'confidence': confidence,
+                    'i': i
+                })
+            
+        # 添加做空开仓信号（过滤掉会立即亏损的）
+        for entry in all_short_entries:
+            entry_idx, entry_price, confidence, i = entry
+            # 检查开仓后短期内是否立即向相反方向运行
+            will_immediately_lose = False
+            adverse_threshold = 0.005  # 0.5%的不利波动阈值
+            
+            # 检查开仓后几个点的价格变化
+            look_ahead = min(10, len(index_values) - entry_idx - 1)  # 最多看10个点
+            max_price_after_entry = entry_price
+            for j in range(entry_idx+1, entry_idx+1+look_ahead):
+                current_price = index_values[j]
+                if current_price > max_price_after_entry:
+                    max_price_after_entry = current_price
+                    max_adverse_excursion = (max_price_after_entry - entry_price) / entry_price
+                    if max_adverse_excursion > adverse_threshold:
+                        will_immediately_lose = True
+                        break
+            
+            if not will_immediately_lose:
+                all_signals.append({
+                    'type': 'short_entry',
+                    'idx': entry_idx,
+                    'price': entry_price,
+                    'confidence': confidence,
+                    'i': i
+                })
+        
+        # 添加平仓信号（不做过滤）
+        for exit in all_long_exits:
+            idx, price, confidence, i = exit
+            all_signals.append({
+                'type': 'long_exit',
+                'idx': idx,
+                'price': price,
+                'confidence': confidence,
+                'i': i
+            })
+            
+        for exit in all_short_exits:
+            idx, price, confidence, i = exit
+            all_signals.append({
+                'type': 'short_exit',
+                'idx': idx,
+                'price': price,
+                'confidence': confidence,
+                'i': i
+            })
+        
+        # 按置信度排序并取前20个
+        all_signals.sort(key=lambda x: x['confidence'], reverse=True)
+        top_signals = all_signals[:20]
+        
+        # 分类信号点
+        for signal in top_signals:
+            if signal['type'] == 'long_entry':
+                long_entry_points.append((signal['idx'], signal['price']))
+            elif signal['type'] == 'long_exit':
+                long_exit_points.append((signal['idx'], signal['price']))
+            elif signal['type'] == 'short_entry':
+                short_entry_points.append((signal['idx'], signal['price']))
+            elif signal['type'] == 'short_exit':
+                short_exit_points.append((signal['idx'], signal['price']))
+        
+        print(f"显示 {len(top_signals)} 个高置信度且不会立即亏损的信号点")
+    else:
+        # 根据置信度排序并选择前10个最佳交易
+        all_trades = long_trades + short_trades
+        all_trades.sort(key=lambda x: x['confidence'], reverse=True)
+        
+        # 只保留前10个最佳交易
+        top_trades = all_trades[:10]
+        
+        # 提取用于绘制的点
+        long_entry_points = []
+        long_exit_points = []
+        short_entry_points = []
+        short_exit_points = []
+        
+        for trade in top_trades:
+            if trade in long_trades:
+                long_entry_points.append((trade['entry_idx'], trade['entry_price']))
+                long_exit_points.append((trade['exit_idx'], trade['exit_price']))
+            elif trade in short_trades:
+                short_entry_points.append((trade['entry_idx'], trade['entry_price']))
+                short_exit_points.append((trade['exit_idx'], trade['exit_price']))
+        
+        print(f"显示 {len(top_trades)} 个完整交易对")
     
     # 绘制交易信号箭头
     if long_entry_points:
@@ -204,10 +423,22 @@ def plot_trading_signals(index_values, predictions, use_multiscale=False):
     
     # 打印交易信号统计
     print(f"交易信号统计:")
-    print(f"  做多开仓信号: {len(long_entry_points)} 个")
-    print(f"  做多平仓信号: {len(long_exit_points)} 个")
-    print(f"  做空开仓信号: {len(short_entry_points)} 个")
-    print(f"  做空平仓信号: {len(short_exit_points)} 个")
+    print(f"  做多开仓信号: {len(all_long_entries)} 个")
+    print(f"  做多平仓信号: {len(all_long_exits)} 个")
+    print(f"  做空开仓信号: {len(all_short_entries)} 个")
+    print(f"  做空平仓信号: {len(all_short_exits)} 个")
+    print(f"  完整做多交易(过滤后): {len(long_trades)} 个")
+    print(f"  完整做空交易(过滤后): {len(short_trades)} 个")
+    
+    # 打印前10个交易的详细信息（如果有完整交易）
+    if top_trades:
+        print("\n前10个最佳交易:")
+        for i, trade in enumerate(top_trades):
+            trade_type = "做多" if trade in long_trades else "做空"
+            print(f"  {i+1}. {trade_type}交易 - 置信度: {trade['confidence']:.4f}, "
+                  f"预期收益: {trade['expected_profit']*100:.2f}%, "
+                  f"最大不利波动: {trade['max_adverse_excursion']*100:.2f}%, "
+                  f"开仓点: {trade['entry_idx']}, 平仓点: {trade['exit_idx']}")
 
 def detect_model_type(model_path):
     """
@@ -284,7 +515,7 @@ def main(data_file, use_multiscale=None):
     
     # 可视化结果
     print("绘制图表...")
-    plot_trading_signals(index_values, predictions, use_multiscale)
+    plot_trading_signals(index_values, predictions, probabilities, use_multiscale)
     
     # 打印预测分布
     unique, counts = np.unique(predictions, return_counts=True)
@@ -294,6 +525,7 @@ def main(data_file, use_multiscale=None):
         print(f"  {label_names[label]} ({label}): {count} 个")
     
     print("预测和可视化完成!")
+
 
 if __name__ == "__main__":
     # 检查命令行参数

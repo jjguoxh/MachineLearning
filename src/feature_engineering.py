@@ -80,6 +80,54 @@ def add_features(df):
                 (current_d >= prev_d)):
                 df.loc[i, 'reversal_signal'] = 1  # 可能的上涨反转
     
+    # 差分特征
+    for diff in [1, 2, 3]:
+        df[f'index_value_diff_{diff}'] = df['index_value'].diff(diff)
+        df[f'a_diff_{diff}'] = df['a'].diff(diff)
+        df[f'b_diff_{diff}'] = df['b'].diff(diff)
+        df[f'c_diff_{diff}'] = df['c'].diff(diff)
+        df[f'd_diff_{diff}'] = df['d'].diff(diff)
+    
+    # 新增特征：index_value创新高/新低但a,b,c未同步创新高/新低
+    # 用于预测趋势反转信号
+    df['divergence_signal'] = 0  # 1表示可能向上反转，-1表示可能向下反转
+    
+    # 至少需要5个数据点才能开始计算
+    for i in range(5, len(df)):
+        # 获取当前窗口数据（包括当前点和之前的所有点）
+        window_data = df.iloc[:i+1]
+        
+        # 当前index_value值
+        current_index_value = df['index_value'].iloc[i]
+        
+        # 检查index_value是否达到新高（相对于左侧所有数据）
+        is_index_new_high = current_index_value == window_data['index_value'].max()
+        # 检查index_value是否达到新低（相对于左侧所有数据）
+        is_index_new_low = current_index_value == window_data['index_value'].min()
+        
+        if is_index_new_high:
+            # index_value创新高，检查a,b,c是否也创新高
+            a_new_high = df['a'].iloc[i] == window_data['a'].max()
+            b_new_high = df['b'].iloc[i] == window_data['b'].max()
+            c_new_high = df['c'].iloc[i] == window_data['c'].max()
+            
+            # 如果index_value创新高，但a,b,c没有同步创新高，可能是上涨乏力，发出向下反转信号
+            if not (a_new_high and b_new_high and c_new_high):
+                df.loc[i, 'divergence_signal'] = -1  # 向下反转信号
+                
+        elif is_index_new_low:
+            # index_value创新低，检查a,b,c是否也创新低
+            a_new_low = df['a'].iloc[i] == window_data['a'].min()
+            b_new_low = df['b'].iloc[i] == window_data['b'].min()
+            c_new_low = df['c'].iloc[i] == window_data['c'].min()
+            
+            # 如果index_value创新低，但a,b,c没有同步创新低，可能是下跌动能不足，发出向上反转信号
+            if not (a_new_low and b_new_low and c_new_low):
+                df.loc[i, 'divergence_signal'] = 1  # 向上反转信号
+    
+    # 填充缺失值
+    df.fillna(method='bfill', inplace=True)
+
     # 新增特征3：峰值和谷值特征
     # 找到index_value的峰值和谷值点
     peaks, _ = find_peaks(df['index_value'], distance=5)  # 峰值点
