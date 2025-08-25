@@ -214,4 +214,8 @@ model/*.pth
 *.csv
 .idea/
 .vscode/
-
+predictions_improved/
+predictions_with_complete_labels/
+predictions_with_improved_labels/
+analysis/
+predictions/

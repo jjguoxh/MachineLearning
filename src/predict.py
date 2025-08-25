@@ -132,7 +132,7 @@ def predict(model, X, use_multiscale=False):
         preds = torch.argmax(outputs, dim=1).cpu().numpy()
         return preds, probs.cpu().numpy()
 
-def plot_trading_signals(index_values, predictions, probabilities, use_multiscale=False):
+def plot_trading_signals(index_values, predictions, probabilities, use_multiscale=False, output_filename=None):
     """
     绘制价格曲线和交易信号
     """
@@ -418,8 +418,13 @@ def plot_trading_signals(index_values, predictions, probabilities, use_multiscal
     # 调整布局
     plt.tight_layout()
     
-    # 显示图表
-    plt.show()
+    # 保存或显示图表
+    if output_filename:
+        plt.savefig(output_filename, dpi=300, bbox_inches='tight')
+        print(f"图表已保存为: {output_filename}")
+        plt.close()  # 关闭图表以释放内存
+    else:
+        plt.show()
     
     # 打印交易信号统计
     print(f"交易信号统计:")
@@ -461,7 +466,7 @@ def detect_model_type(model_path):
         # 默认返回单尺度
         return False
 
-def main(data_file, use_multiscale=None):
+def main(data_file, use_multiscale=None, output_filename=None):
     """
     主函数
     """
@@ -515,7 +520,7 @@ def main(data_file, use_multiscale=None):
     
     # 可视化结果
     print("绘制图表...")
-    plot_trading_signals(index_values, predictions, probabilities, use_multiscale)
+    plot_trading_signals(index_values, predictions, probabilities, use_multiscale, output_filename)
     
     # 打印预测分布
     unique, counts = np.unique(predictions, return_counts=True)
@@ -528,12 +533,44 @@ def main(data_file, use_multiscale=None):
 
 
 if __name__ == "__main__":
-    # 检查命令行参数
-    data_file = "250617.csv"
+    import glob
+    
+    # 批量处理../data/目录下的所有CSV文件
+    data_dir = "../data/"
     use_multiscale = True  # 显式设置为多尺度
     
-    if not os.path.exists(data_file):
-        print(f"数据文件不存在: {data_file}")
+    if not os.path.exists(data_dir):
+        print(f"数据目录不存在: {data_dir}")
         sys.exit(1)
     
-    main(data_file, use_multiscale)
+    # 获取所有CSV文件
+    csv_files = glob.glob(os.path.join(data_dir, "*.csv"))
+    
+    if not csv_files:
+        print(f"在目录 {data_dir} 中未找到CSV文件")
+        sys.exit(1)
+    
+    print(f"找到 {len(csv_files)} 个CSV文件")
+    
+    # 确保输出目录存在
+    output_dir = "../predictions/"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 处理每个CSV文件
+    for csv_file in csv_files:
+        print(f"\n{'='*60}")
+        print(f"处理文件: {csv_file}")
+        
+        # 获取文件名（不含扩展名）
+        base_name = os.path.splitext(os.path.basename(csv_file))[0]
+        output_filename = os.path.join(output_dir, f"{base_name}_prediction.png")
+        
+        try:
+            main(csv_file, use_multiscale, output_filename)
+        except Exception as e:
+            print(f"处理文件 {csv_file} 时发生错误: {e}")
+            continue
+    
+    print(f"\n{'='*60}")
+    print("所有文件处理完成！")
+    print(f"预测结果图片保存在: {output_dir}")
