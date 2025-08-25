@@ -9,26 +9,73 @@ from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import classification_report, confusion_matrix
 from model import TransformerClassifier
 from feature_engineering import add_features
+import glob
+import os
 
-SEQ_LEN = 300  # 对应标签窗口长度，和标签生成时一致
+# Optimized parameters according to project specifications
+SEQ_LEN = 15  # Reduced from 300 to 15 for faster response
 BATCH_SIZE = 64
 EPOCHS = 50
 LR = 1e-4
 PATIENCE = 5
-MODEL_PATH = "best_longtrend_model.pth"
+MODEL_PATH = "./model/best_longtrend_model.pth"
 
-# 1. 读带标签数据
-df = pd.read_csv("data_with_longtrend_labels.csv")
+# Ensure model directory exists
+os.makedirs("./model", exist_ok=True)
 
-# 2. 特征工程
+# 1. Load data with relaxed labels (priority order)
+data_dirs = [
+    "./data_with_relaxed_labels/",   # Highest priority
+    "./data_with_improved_labels/",  # Second priority
+    "./data_with_complete_labels/",  # Third priority
+    "./data/"                        # Lowest priority
+]
+
+selected_dir = None
+for data_dir in data_dirs:
+    if os.path.exists(data_dir):
+        csv_files = glob.glob(os.path.join(data_dir, "*.csv"))
+        if csv_files:
+            selected_dir = data_dir
+            print(f"Using data directory: {data_dir} ({len(csv_files)} files)")
+            break
+
+if not selected_dir:
+    raise FileNotFoundError("No valid data directory found. Please run generate_complete_trading_labels.py first.")
+
+# Combine all CSV files
+all_dfs = []
+for csv_file in csv_files:
+    df_temp = pd.read_csv(csv_file)
+    if 'label' in df_temp.columns:
+        all_dfs.append(df_temp)
+        print(f"Loaded {csv_file}: {len(df_temp)} rows")
+
+if not all_dfs:
+    raise ValueError("No CSV files with 'label' column found.")
+
+df = pd.concat(all_dfs, ignore_index=True)
+print(f"Combined dataset: {len(df)} rows")
+
+# 2. Apply feature engineering (must generate 88 features)
+print("Applying feature engineering...")
 df = add_features(df)
+print(f"After feature engineering: {df.shape}")
 
-# 3. 准备特征列和标签
+# 3. Prepare feature columns and labels (5-class classification)
 exclude_cols = ['label', 'index_value']
 feature_cols = [c for c in df.columns if c not in exclude_cols]
 
+print(f"Feature count: {len(feature_cols)} (expected: 88)")
+if len(feature_cols) != 88:
+    print(f"Warning: Feature count mismatch! Expected 88, got {len(feature_cols)}")
+
 features = df[feature_cols].values
 labels = df['label'].values
+
+# Check label distribution
+label_counts = pd.Series(labels).value_counts().sort_index()
+print(f"Label distribution: {dict(label_counts)}")
 
 # 4. 标准化
 scaler = StandardScaler()
@@ -58,9 +105,18 @@ X_val = torch.tensor(X_val, dtype=torch.float32).to(device)
 y_val = torch.tensor(y_val, dtype=torch.long).to(device)
 class_weights = class_weights.to(device)
 
-# 9. 模型初始化
+# 8. Initialize model for 5-class classification
 input_dim = X_train.shape[2]
-model = TransformerClassifier(input_dim=input_dim, model_dim=64, num_heads=4, num_layers=2, num_classes=2).to(device)
+model = TransformerClassifier(
+    input_dim=input_dim, 
+    model_dim=128,  # Increased for better performance
+    num_heads=8, 
+    num_layers=4, 
+    num_classes=5,  # 5-class: 0=no_action, 1=long_entry, 2=long_exit, 3=short_entry, 4=short_exit
+    dropout=0.1
+).to(device)
+
+print(f"Model initialized with input_dim={input_dim}, num_classes=5")
 
 criterion = nn.CrossEntropyLoss(weight=class_weights)
 optimizer = optim.Adam(model.parameters(), lr=LR)
@@ -97,24 +153,31 @@ for epoch in range(EPOCHS):
     if val_loss < best_val_loss:
         best_val_loss = val_loss
         patience_counter = 0
-        model.save(MODEL_PATH)
-        print("保存最佳模型")
+        torch.save(model.state_dict(), MODEL_PATH)
+        print("Best model saved")
     else:
         patience_counter += 1
         if patience_counter >= PATIENCE:
-            print("早停，训练结束")
+            print("Early stopping triggered")
             break
 
-# 11. 评估
-model.load(MODEL_PATH, device)
+# 11. Load best model and evaluate
+model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
 model.eval()
 with torch.no_grad():
     outputs = model(X_val)
     preds = torch.argmax(outputs, dim=1).cpu().numpy()
     y_true = y_val.cpu().numpy()
 
-print("\n验证集分类报告:")
-from sklearn.metrics import classification_report, confusion_matrix
+print("\n=== Validation Set Classification Report ===")
 print(classification_report(y_true, preds))
-print("混淆矩阵:")
+print("\nConfusion Matrix:")
 print(confusion_matrix(y_true, preds))
+
+# Calculate signal density
+signal_count = np.sum(preds != 0)
+signal_density = signal_count / len(preds)
+print(f"\nSignal density: {signal_density:.4f} ({signal_density*100:.2f}%)")
+
+print(f"\nModel saved to: {MODEL_PATH}")
+print("Training completed successfully!")

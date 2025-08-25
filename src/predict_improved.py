@@ -615,25 +615,32 @@ def detect_model_type(model_path):
 
 if __name__ == "__main__":
     # 批量处理../data/目录下的所有CSV文件
-    # 优先使用完整交易标签数据，其次是改进标签，最后是原始数据
-    complete_labels_dir = "../data_with_complete_labels/"
+    # 优先级：宽松标签 > 改进标签 > 完整交易标签 > 原始数据
+    relaxed_labels_dir = "../data_with_relaxed_labels/"
     improved_data_dir = "../data_with_improved_labels/"
+    complete_labels_dir = "../data_with_complete_labels/"
     original_data_dir = "../data/"
     
     # 检查数据目录优先级
-    if os.path.exists(complete_labels_dir):
-        data_dir = complete_labels_dir
-        data_type = "complete"
-        print(f"✅ 使用完整交易标签数据目录: {data_dir}")
+    if os.path.exists(relaxed_labels_dir):
+        data_dir = relaxed_labels_dir
+        data_type = "relaxed"
+        print(f"🎆 使用宽松参数标签数据目录: {data_dir}")
+        print(f"📊 期望信号密度: 2.5-3.1%, 胜率: 100%")
     elif os.path.exists(improved_data_dir):
         data_dir = improved_data_dir
         data_type = "improved"
         print(f"🔄 使用改进标签数据目录: {data_dir}")
+        print(f"📊 期望信号密度: ~37.8%")
+    elif os.path.exists(complete_labels_dir):
+        data_dir = complete_labels_dir
+        data_type = "complete"
+        print(f"✅ 使用完整交易标签数据目录: {data_dir}")
     else:
         data_dir = original_data_dir
         data_type = "original"
         print(f"⚠️  使用原始数据目录: {data_dir}")
-        print(f"💡 提示: 运行 generate_complete_trading_labels.py 生成完整交易标签")
+        print(f"💡 提示: 运行 diagnose_signal_density.py 生成改进标签")
     
     use_multiscale = True  # 显式设置为多尺度
     
@@ -651,10 +658,12 @@ if __name__ == "__main__":
     print(f"找到 {len(csv_files)} 个CSV文件")
     
     # 确保输出目录存在
-    if data_type == "complete":
-        output_dir = "../predictions_with_complete_labels/"
+    if data_type == "relaxed":
+        output_dir = "../predictions_with_relaxed_labels/"
     elif data_type == "improved":
         output_dir = "../predictions_with_improved_labels/"
+    elif data_type == "complete":
+        output_dir = "../predictions_with_complete_labels/"
     else:
         output_dir = "../predictions_improved/"
     os.makedirs(output_dir, exist_ok=True)
@@ -667,10 +676,12 @@ if __name__ == "__main__":
         
         # 获取文件名（不含扩展名）
         base_name = os.path.splitext(os.path.basename(csv_file))[0]
-        if data_type == "complete":
-            output_filename = os.path.join(output_dir, f"{base_name}_complete_labels.png")
+        if data_type == "relaxed":
+            output_filename = os.path.join(output_dir, f"{base_name}_relaxed_labels.png")
         elif data_type == "improved":
             output_filename = os.path.join(output_dir, f"{base_name}_improved_labels.png")
+        elif data_type == "complete":
+            output_filename = os.path.join(output_dir, f"{base_name}_complete_labels.png")
         else:
             output_filename = os.path.join(output_dir, f"{base_name}_improved_prediction.png")
         
@@ -687,23 +698,37 @@ if __name__ == "__main__":
     print(f"改进版预测结果图片保存在: {output_dir}")
     
     # 给出进一步改进建议
-    if data_type == "original":
+    if data_type == "relaxed":
+        if all_results and np.mean([r['signal_density'] for r in all_results.values()]) > 0.02:
+            print(f"\n🎆 宽松标签效果很好！")
+            print(f"   建议下一步:")
+            print(f"   1. 使用当前数据重新训练模型")
+            print(f"   2. 考虑进一步优化特征工程")
+            print(f"   3. 验证实际交易效果")
+        else:
+            print(f"\n🔧 宽松标签仍需调整:")
+            print(f"   1. 进一步降低 min_profit_target")
+            print(f"   2. 减少 min_hold_time")
+            print(f"   3. 缩小 min_signal_gap")
+    elif data_type == "original":
         print(f"\n💡 建议的下一步改进:")
-        print(f"   1. 运行 'python generate_complete_trading_labels.py' 生成完整交易标签")
+        print(f"   1. 运行 'python diagnose_signal_density.py' 生成改进标签")
         print(f"   2. 使用新标签重新训练模型")
         print(f"   3. 再次运行此预测脚本查看效果")
     elif data_type == "improved":
-        print(f"\n⚠️  发现开仓无平仓问题？")
-        print(f"   1. 运行 'python generate_complete_trading_labels.py' 生成完整交易标签")
-        print(f"   2. 这将确保每个开仓都有对应的平仓信号")
+        print(f"\n📊 改进标签效果分析:")
+        if all_results:
+            avg_signal_density = np.mean([r['signal_density'] for r in all_results.values()])
+            if avg_signal_density > 0.3:
+                print(f"   ✅ 信号密度很高: {avg_signal_density:.1%}")
+                print(f"   建议: 检查交易频率是否过高，考虑使用完整交易标签")
+            else:
+                print(f"   信号密度: {avg_signal_density:.1%}")
     else:
         if all_results and np.mean([r['signal_density'] for r in all_results.values()]) < 0.01:
             print(f"\n🚨 信号密度仍然过低的解决建议:")
             print(f"   1. 检查模型训练数据质量")
-            print(f"   2. 调整 generate_complete_trading_labels.py 中的参数:")
-            print(f"      - 降低 min_profit_target (0.008 -> 0.005)")
-            print(f"      - 减少 min_hold_time (15 -> 10)")
-            print(f"      - 缩小 min_signal_gap (25 -> 15)")
+            print(f"   2. 运行 diagnose_signal_density.py 生成宽松标签")
             print(f"   3. 重新训练模型")
         else:
             print(f"\n🎯 如果预测效果仍不理想，可以尝试:")
