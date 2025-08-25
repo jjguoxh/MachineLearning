@@ -558,8 +558,37 @@ def save_scaler(scaler, scaler_path=SCALER_PATH):
 
 if __name__ == "__main__":
     # 示例用法
-    data_file = "../data/250814.csv"  # 替换为实际数据文件路径
-    trained_agent = train_reinforcement_learning_strategy(data_file)
-    results = backtest_hybrid_strategy(data_file, trained_agent)
-    print("回测结果:", results)
+    # data_file = "../data/250814.csv"  # 替换为实际数据文件路径
+    # trained_agent = train_reinforcement_learning_strategy(data_file)
+    # results = backtest_hybrid_strategy(data_file, trained_agent)
+    # print("回测结果:", results)
+    # save_scaler(trained_agent.scaler)
+    # 示例用法
+    import glob
+    
+    # 获取所有CSV文件
+    data_files = glob.glob("../data/*.csv")
+    
+    if not data_files:
+        print("未找到任何CSV文件")
+        exit()
+    
+    # 使用第一个文件训练
+    print(f"找到 {len(data_files)} 个CSV文件")
+    print("使用第一个文件进行训练...")
+    training_file = data_files[0]
+    trained_agent = train_reinforcement_learning_strategy(training_file)
+    
+    # 对所有文件进行回测
+    all_results = []
+    for data_file in data_files:
+        print(f"正在回测文件: {data_file}")
+        results = backtest_hybrid_strategy(data_file, trained_agent)
+        all_results.append({
+            'file': data_file,
+            'results': results
+        })
+        print("回测结果:", results)
+    
+    # 保存scaler
     save_scaler(trained_agent.scaler)
